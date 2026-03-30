@@ -1,7 +1,7 @@
 {
     "version":            "1.3",
     "project_name":       "sensor-fw-c",
-    "project_version":    "805ec85",
+    "project_version":    "2577a4e-dirty",
     "project_path":       "/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c",
     "idf_path":           "/Users/chablis/.espressif/v6.0/esp-idf",
     "build_dir":          "/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build",

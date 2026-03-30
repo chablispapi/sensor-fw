@@ -1,0 +1,2 @@
+dependencies:
+  espressif/esp-mqtt: "^1.2.0"
