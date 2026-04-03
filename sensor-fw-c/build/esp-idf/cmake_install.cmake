@@ -709,6 +709,11 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
+  include("/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
   include("/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/main/cmake_install.cmake")
 endif()
 

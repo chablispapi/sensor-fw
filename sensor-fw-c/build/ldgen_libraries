@@ -202,4 +202,7 @@
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/perfmon/libperfmon.a
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/rt/librt.a
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/spiffs/libspiffs.a
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/libmqtt.a
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/main/libmain.a
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/driver/libdriver.a
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/libmqtt.a

@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
+#include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -14,9 +15,9 @@
 
 static const char *TAG = "SENSOR_FW";
 
-#define WIFI_SSID      "Italia"
-#define WIFI_PASS      "Jagvetinte10"
-#define MQTT_BROKER    "mqtt://192.168.0.108"
+#define WIFI_SSID      "SKYWIFI_XR2RJ"
+#define WIFI_PASS      "WD2gINkeIiZN"
+#define MQTT_BROKER    "mqtt://192.168.0.230"
 
 #define I2C_MASTER_SCL_IO           48      /*!< GPIO number used for I2C master clock */
 #define I2C_MASTER_SDA_IO           47      /*!< GPIO number used for I2C master data  */
@@ -26,6 +27,7 @@ static const char *TAG = "SENSOR_FW";
 
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
+#define MQTT_CONNECTED_BIT BIT1
 
 static esp_mqtt_client_handle_t client;
 static QueueHandle_t temp_queue;
@@ -33,10 +35,10 @@ static QueueHandle_t temp_queue;
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        ESP_ERROR_CHECK(esp_wifi_connect());
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        esp_wifi_connect();
-        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | MQTT_CONNECTED_BIT);
+        ESP_ERROR_CHECK(esp_wifi_connect());
         ESP_LOGI(TAG, "Retry to connect to the AP");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
@@ -85,9 +87,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+            xEventGroupSetBits(s_wifi_event_group, MQTT_CONNECTED_BIT);
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+            xEventGroupClearBits(s_wifi_event_group, MQTT_CONNECTED_BIT);
             break;
         default:
             break;
@@ -118,15 +122,27 @@ esp_err_t i2c_master_init(void) {
 }
 
 void sensor_task(void *pvParameters) {
+    static const uint8_t reg_temperature = 0x00;
+
     while (1) {
         uint8_t data[2];
-        esp_err_t ret = i2c_master_write_read_device(I2C_MASTER_NUM, TMP1x2_SENSOR_ADDR, NULL, 0, data, 2, pdMS_TO_TICKS(1000));
+        esp_err_t ret = i2c_master_write_read_device(
+            I2C_MASTER_NUM,
+            TMP1x2_SENSOR_ADDR,
+            &reg_temperature,
+            sizeof(reg_temperature),
+            data,
+            sizeof(data),
+            pdMS_TO_TICKS(1000)
+        );
         if (ret == ESP_OK) {
             int16_t raw = (data[0] << 4) | (data[1] >> 4);
             if (raw & 0x800) raw |= 0xF000; // Sign extend if negative
             float temperature = raw * 0.0625f;
             ESP_LOGI(TAG, "Temperature: %.2fºC", temperature);
-            xQueueSend(temp_queue, &temperature, portMAX_DELAY);
+            if (xQueueSend(temp_queue, &temperature, 0) != pdTRUE) {
+                ESP_LOGW(TAG, "Temperature queue full, dropping sample");
+            }
         } else {
             ESP_LOGE(TAG, "I2C read failed: %s", esp_err_to_name(ret));
         }
@@ -138,11 +154,23 @@ void mqtt_publish_task(void *pvParameters) {
     float temperature;
     while (1) {
         if (xQueueReceive(temp_queue, &temperature, portMAX_DELAY)) {
+            xEventGroupWaitBits(
+                s_wifi_event_group,
+                WIFI_CONNECTED_BIT | MQTT_CONNECTED_BIT,
+                pdFALSE,
+                pdTRUE,
+                portMAX_DELAY
+            );
+
             char payload[32];
             snprintf(payload, sizeof(payload), "%.2f", temperature);
             if (client) {
                 int msg_id = esp_mqtt_client_publish(client, "esp32/temperature", payload, 0, 1, 0);
-                ESP_LOGI(TAG, "Published temperature: %s to esp32/temperature, msg_id=%d", payload, msg_id);
+                if (msg_id >= 0) {
+                    ESP_LOGI(TAG, "Published temperature: %s to esp32/temperature, msg_id=%d", payload, msg_id);
+                } else {
+                    ESP_LOGW(TAG, "MQTT publish failed for payload %s", payload);
+                }
             }
         }
     }
@@ -158,6 +186,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(ret);
 
     temp_queue = xQueueCreate(2, sizeof(float));
+    ESP_ERROR_CHECK(temp_queue == NULL ? ESP_ERR_NO_MEM : ESP_OK);
 
     wifi_init_sta();
     mqtt_app_start();

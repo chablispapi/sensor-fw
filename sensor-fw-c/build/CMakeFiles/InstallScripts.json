@@ -156,6 +156,7 @@
 		"/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/rt/cmake_install.cmake",
 		"/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/spiffs/cmake_install.cmake",
 		"/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/ulp/cmake_install.cmake",
+		"/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/cmake_install.cmake",
 		"/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/main/cmake_install.cmake"
 	],
 	"Parallel" : false

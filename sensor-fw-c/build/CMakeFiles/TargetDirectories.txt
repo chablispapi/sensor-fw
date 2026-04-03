@@ -1087,6 +1087,13 @@
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/ulp/CMakeFiles/install.dir
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/ulp/CMakeFiles/install/local.dir
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/ulp/CMakeFiles/install/strip.dir
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/CMakeFiles/edit_cache.dir
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/CMakeFiles/rebuild_cache.dir
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/CMakeFiles/list_install_components.dir
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/CMakeFiles/install.dir
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/CMakeFiles/install/local.dir
+/Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/mqtt/CMakeFiles/install/strip.dir
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/main/CMakeFiles/__idf_main.dir
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/main/CMakeFiles/edit_cache.dir
 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/esp-idf/main/CMakeFiles/rebuild_cache.dir
