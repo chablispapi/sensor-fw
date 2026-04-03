@@ -36,9 +36,6 @@ const SSID: &str = "SKYWIFI_XR2RJ";
 const PASSWORD: &str = "WD2gINkeIiZN";
 <<<<<<< HEAD
 const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 230);
-=======
-const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 203);
->>>>>>> c-version
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
