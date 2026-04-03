@@ -34,7 +34,6 @@ macro_rules! mk_static {
 
 const SSID: &str = "SKYWIFI_XR2RJ";
 const PASSWORD: &str = "WD2gINkeIiZN";
-<<<<<<< HEAD
 const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 230);
 
 #[esp_rtos::main]
