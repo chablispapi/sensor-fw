@@ -32,9 +32,9 @@ macro_rules! mk_static {
     }};
 }
 
-const SSID: &str = "Italia";
-const PASSWORD: &str = "Jagvetinte10";
-const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 108);
+const SSID: &str = "SKYWIFI_XR2RJ";
+const PASSWORD: &str = "WD2gINkeIiZN";
+const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 203);
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -143,6 +143,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>)
 async fn mqtt_task(stack: &'static Stack<'static>) {
     let mut rx_buffer = [0; 1024];
     let mut tx_buffer = [0; 1024];
+    let mut mqtt_rx_buf = [0; 256];
 
     loop {
         println!("Waiting for network to be up...");
@@ -170,7 +171,39 @@ async fn mqtt_task(stack: &'static Stack<'static>) {
 
         let mut client: MqttClient<256> = MqttClient::new();
         if let Ok(packet) = client.connect("esp32s3-sensor", None) {
-            let _ = socket.write_all(packet).await;
+            if let Err(e) = socket.write_all(packet).await {
+                println!("MQTT CONNECT write failed: {:?}", e);
+                Timer::after(Duration::from_secs(5)).await;
+                continue;
+            }
+        } else {
+            println!("MQTT CONNECT packet build failed");
+            Timer::after(Duration::from_secs(5)).await;
+            continue;
+        }
+
+        let connack_len = match socket.read(&mut mqtt_rx_buf).await {
+            Ok(0) => {
+                println!("MQTT broker closed connection before CONNACK");
+                Timer::after(Duration::from_secs(5)).await;
+                continue;
+            }
+            Ok(len) => len,
+            Err(e) => {
+                println!("MQTT CONNACK read failed: {:?}", e);
+                Timer::after(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+
+        if client
+            .receive_packet(&mqtt_rx_buf[..connack_len], |_, _, _| {})
+            .is_err()
+            || !client.is_connected()
+        {
+            println!("MQTT broker did not accept the session");
+            Timer::after(Duration::from_secs(5)).await;
+            continue;
         }
 
         loop {
@@ -195,19 +228,34 @@ async fn mqtt_task(stack: &'static Stack<'static>) {
 }
 
 fn format_temp(temp: f32, buf: &mut [u8]) -> &str {
-    let mut itoa_buf = itoa::Buffer::new();
-    let integer = temp as i32;
-    let fraction = ((temp - integer as f32).abs() * 100.0) as i32;
+    let scaled_f = temp * 100.0;
+    let scaled = if scaled_f >= 0.0 {
+        (scaled_f + 0.5) as i32
+    } else {
+        (scaled_f - 0.5) as i32
+    };
+    let integer = scaled / 100;
+    let fraction = (scaled % 100).abs();
 
+    let mut itoa_buf = itoa::Buffer::new();
     let s_int = itoa_buf.format(integer);
     let mut cursor = 0;
     buf[cursor..cursor + s_int.len()].copy_from_slice(s_int.as_bytes());
     cursor += s_int.len();
+    if integer == 0 && scaled < 0 {
+        buf.copy_within(..cursor, 1);
+        buf[0] = b'-';
+        cursor += 1;
+    }
     buf[cursor] = b'.';
     cursor += 1;
 
     let mut itoa_buf = itoa::Buffer::new();
     let s_frac = itoa_buf.format(fraction);
+    if fraction < 10 {
+        buf[cursor] = b'0';
+        cursor += 1;
+    }
     buf[cursor..cursor + s_frac.len()].copy_from_slice(s_frac.as_bytes());
     cursor += s_frac.len();
 
