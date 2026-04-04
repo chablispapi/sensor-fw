@@ -13,8 +13,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_radio::wifi::{WifiController, WifiDevice};
-use tinymqtt::MqttClient;
+use esp_radio::wifi::{WifiController, WifiDevice, WifiError};
 
 use defmt::info;
 use tmp1x2::{SlaveAddr, Tmp1x2};
@@ -35,6 +34,8 @@ macro_rules! mk_static {
 const SSID: &str = "SKYWIFI_XR2RJ";
 const PASSWORD: &str = "WD2gINkeIiZN";
 const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 230);
+const MQTT_CLIENT_ID: &str = "esp32s3-sensor";
+const MQTT_TOPIC: &str = "esp32/temperature";
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -80,7 +81,8 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(mqtt_task(stack)).expect("mqtt task spawn");
 
     // i2c config
-    let i2cconfig = esp_hal::i2c::master::Config::default();
+    let i2cconfig =
+        esp_hal::i2c::master::Config::default().with_frequency(esp_hal::time::Rate::from_khz(400));
     let i2c = esp_hal::i2c::master::I2c::new(peripherals.I2C0, i2cconfig)
         .ok()
         .expect("error i2c conf")
@@ -104,14 +106,23 @@ async fn main(spawner: Spawner) -> ! {
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
     loop {
-        if !controller.is_started().unwrap() {
+        if !matches!(controller.is_started(), Ok(true)) {
             let client_config = esp_radio::wifi::ModeConfig::Client(
                 esp_radio::wifi::ClientConfig::default()
                     .with_ssid(SSID.into())
                     .with_password(PASSWORD.into()),
             );
-            controller.set_config(&client_config).unwrap();
-            controller.start().unwrap();
+            if let Err(e) = controller.set_config(&client_config) {
+                println!("Failed to apply WiFi config: {e:?}");
+                Timer::after(Duration::from_secs(5)).await;
+                continue;
+            }
+
+            if let Err(e) = controller.start() {
+                println!("Failed to start WiFi: {e:?}");
+                Timer::after(Duration::from_secs(5)).await;
+                continue;
+            }
         }
 
         match controller.connect() {
@@ -120,8 +131,13 @@ async fn connection(mut controller: WifiController<'static>) {
                 // Wait for disconnect
                 loop {
                     Timer::after(Duration::from_secs(1)).await;
-                    if !controller.is_connected().unwrap() {
-                        break;
+                    match controller.is_connected() {
+                        Ok(true) => {}
+                        Ok(false) | Err(WifiError::Disconnected) => break,
+                        Err(e) => {
+                            println!("WiFi status check failed: {e:?}");
+                            break;
+                        }
                     }
                 }
                 println!("Disconnected");
@@ -144,6 +160,7 @@ async fn mqtt_task(stack: &'static Stack<'static>) {
     let mut rx_buffer = [0; 1024];
     let mut tx_buffer = [0; 1024];
     let mut mqtt_rx_buf = [0; 256];
+    let mut mqtt_tx_buf = [0; 256];
 
     loop {
         println!("Waiting for network to be up...");
@@ -169,15 +186,17 @@ async fn mqtt_task(stack: &'static Stack<'static>) {
 
         println!("Connected to MQTT broker!");
 
-        let mut client: MqttClient<256> = MqttClient::new();
-        if let Ok(packet) = client.connect("esp32s3-sensor", None) {
-            if let Err(e) = socket.write_all(packet).await {
-                println!("MQTT CONNECT write failed: {:?}", e);
+        let connect_packet = match build_mqtt_connect_packet(MQTT_CLIENT_ID, &mut mqtt_tx_buf) {
+            Some(packet) => packet,
+            None => {
+                println!("MQTT CONNECT packet build failed");
                 Timer::after(Duration::from_secs(5)).await;
                 continue;
             }
-        } else {
-            println!("MQTT CONNECT packet build failed");
+        };
+
+        if let Err(e) = socket.write_all(connect_packet).await {
+            println!("MQTT CONNECT write failed: {:?}", e);
             Timer::after(Duration::from_secs(5)).await;
             continue;
         }
@@ -196,35 +215,142 @@ async fn mqtt_task(stack: &'static Stack<'static>) {
             }
         };
 
-        if client
-            .receive_packet(&mqtt_rx_buf[..connack_len], |_, _, _| {})
-            .is_err()
-            || !client.is_connected()
-        {
-            println!("MQTT broker did not accept the session");
+        if let Err(reason) = parse_mqtt_connack(&mqtt_rx_buf[..connack_len]) {
+            println!("MQTT broker did not accept the session: {}", reason);
             Timer::after(Duration::from_secs(5)).await;
             continue;
         }
 
         loop {
-            // Wait for temperature from main loop
             let temp = TEMP_CHANNEL.receive().await;
 
-            // Format temperature as string
             let mut payload_buf = [0u8; 32];
             let payload = format_temp(temp, &mut payload_buf);
+            let publish_packet =
+                match build_mqtt_publish_packet(MQTT_TOPIC, payload.as_bytes(), &mut mqtt_tx_buf) {
+                    Some(packet) => packet,
+                    None => {
+                        println!("MQTT publish packet build failed");
+                        continue;
+                    }
+                };
 
-            if let Ok(packet) = client.publish("esp32/temperature", payload.as_bytes()) {
-                if let Err(_) = socket.write_all(packet).await {
-                    println!("MQTT Publish failed, connection lost");
-                    break;
-                }
-                println!("Published temperature: {} to esp32/temperature", payload);
+            if let Err(_) = socket.write_all(publish_packet).await {
+                println!("MQTT Publish failed, connection lost");
+                break;
             }
+
+            println!("Published temperature: {} to {}", payload, MQTT_TOPIC);
         }
 
         Timer::after(Duration::from_secs(5)).await;
     }
+}
+
+fn build_mqtt_connect_packet<'a>(client_id: &str, buf: &'a mut [u8]) -> Option<&'a [u8]> {
+    let protocol_name = b"MQTT";
+    let remaining_len = 10usize.checked_add(2)?.checked_add(client_id.len())?;
+    let fixed_header_len = mqtt_remaining_len_bytes(remaining_len)?;
+    let total_len = 1usize.checked_add(fixed_header_len)?.checked_add(remaining_len)?;
+    if total_len > buf.len() {
+        return None;
+    }
+
+    let mut cursor = 0;
+    buf[cursor] = 0x10;
+    cursor += 1;
+    cursor += write_remaining_len(remaining_len, &mut buf[cursor..])?;
+    cursor += write_mqtt_string(protocol_name, &mut buf[cursor..])?;
+
+    buf[cursor] = 0x04;
+    cursor += 1;
+    buf[cursor] = 0x02;
+    cursor += 1;
+    buf[cursor] = 0x00;
+    cursor += 1;
+    buf[cursor] = 0x00;
+    cursor += 1;
+    cursor += write_mqtt_string(client_id.as_bytes(), &mut buf[cursor..])?;
+
+    Some(&buf[..cursor])
+}
+
+fn build_mqtt_publish_packet<'a>(
+    topic: &str,
+    payload: &[u8],
+    buf: &'a mut [u8],
+) -> Option<&'a [u8]> {
+    let remaining_len = 2usize
+        .checked_add(topic.len())?
+        .checked_add(payload.len())?;
+    let fixed_header_len = mqtt_remaining_len_bytes(remaining_len)?;
+    let total_len = 1usize.checked_add(fixed_header_len)?.checked_add(remaining_len)?;
+    if total_len > buf.len() {
+        return None;
+    }
+
+    let mut cursor = 0;
+    buf[cursor] = 0x30;
+    cursor += 1;
+    cursor += write_remaining_len(remaining_len, &mut buf[cursor..])?;
+    cursor += write_mqtt_string(topic.as_bytes(), &mut buf[cursor..])?;
+    buf[cursor..cursor + payload.len()].copy_from_slice(payload);
+    cursor += payload.len();
+
+    Some(&buf[..cursor])
+}
+
+fn parse_mqtt_connack(packet: &[u8]) -> Result<(), &'static str> {
+    if packet.len() < 4 {
+        return Err("short CONNACK");
+    }
+    if packet[0] != 0x20 {
+        return Err("unexpected packet type");
+    }
+    if packet[1] != 0x02 {
+        return Err("unexpected CONNACK length");
+    }
+    if packet[3] != 0x00 {
+        return Err("connection refused");
+    }
+    Ok(())
+}
+
+fn mqtt_remaining_len_bytes(len: usize) -> Option<usize> {
+    match len {
+        0..=127 => Some(1),
+        128..=16_383 => Some(2),
+        16_384..=2_097_151 => Some(3),
+        2_097_152..=268_435_455 => Some(4),
+        _ => None,
+    }
+}
+
+fn write_remaining_len(mut len: usize, buf: &mut [u8]) -> Option<usize> {
+    let mut cursor = 0;
+    loop {
+        let mut byte = (len % 128) as u8;
+        len /= 128;
+        if len > 0 {
+            byte |= 0x80;
+        }
+        *buf.get_mut(cursor)? = byte;
+        cursor += 1;
+        if len == 0 {
+            return Some(cursor);
+        }
+    }
+}
+
+fn write_mqtt_string(value: &[u8], buf: &mut [u8]) -> Option<usize> {
+    let len = u16::try_from(value.len()).ok()? as usize;
+    if len + 2 > buf.len() {
+        return None;
+    }
+    buf[0] = ((len >> 8) & 0xff) as u8;
+    buf[1] = (len & 0xff) as u8;
+    buf[2..2 + len].copy_from_slice(value);
+    Some(len + 2)
 }
 
 fn format_temp(temp: f32, buf: &mut [u8]) -> &str {
