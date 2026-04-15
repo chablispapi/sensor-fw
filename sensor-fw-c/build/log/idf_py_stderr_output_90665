@@ -1,9 +1,0 @@
-Command: /Users/chablis/.espressif/tools/python/v6.0/venv/bin/python /Users/chablis/.espressif/v6.0/esp-idf/tools/idf_monitor.py -p /dev/tty.usbmodem1201 -b 115200 --toolchain-prefix xtensa-esp32s3-elf- --target esp32s3 --revision 0 /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/sensor-fw-c.elf /Users/chablis/Desktop/uni/svezia/pcb/code/sensor-fw/sensor-fw-c/build/bootloader/bootloader.elf -m '/Users/chablis/.espressif/tools/python/v6.0/venv/bin/python' '/Users/chablis/.espressif/v6.0/esp-idf/tools/idf.py' '-p' '/dev/tty.usbmodem1201'
-[0;33m--- Warning: Serial ports accessed as /dev/tty.* will hang gdb if launched.[0m
-[0;33m--- Using /dev/cu.usbmodem1201 instead...[0m
-[0;33m--- esp-idf-monitor 1.9.0 on /dev/cu.usbmodem1201 115200[0m
-[0;33m--- Quit: Ctrl+] | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H[0m
-[0m--- 0x40048836: [0;33muart_tx_one_char_uart[0m[0m in [0;32mROM[0m
-[0m--- 0x403c8700: [0;33m_stext[0m[0m at [0;32m??[0m[0m:[1;31m?[0m
-[0m--- 0x403c8908: [0;33mcall_start_cpu0[0m[0m at [0;32m/Users/chablis/.espressif/v6.0/esp-idf/components/bootloader/subproject/main/bootloader_start.c[0m[0m:[1;31m27[0m
-[0m
