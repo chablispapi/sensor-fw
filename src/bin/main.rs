@@ -1,15 +1,17 @@
 #![no_std]
 #![no_main]
 
+use core::time::Duration as SleepDuration;
+
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use embedded_io_async::Write;
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock, interrupt::software::SoftwareInterruptControl, ram, rng::Rng,
+    rtc_cntl::{sleep::TimerWakeupSource, Rtc},
     timer::timg::TimerGroup,
 };
 use esp_println::println;
@@ -21,9 +23,6 @@ use {esp_backtrace as _, esp_println as _};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// Channel to send temperature data from main loop to MQTT task
-static TEMP_CHANNEL: Channel<CriticalSectionRawMutex, f32, 2> = Channel::new();
-
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -31,11 +30,13 @@ macro_rules! mk_static {
     }};
 }
 
-const SSID: &str = "SKYWIFI_XR2RJ";
-const PASSWORD: &str = "WD2gINkeIiZN";
-const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 230);
+const SSID: &str = "Italia";
+const PASSWORD: &str = "Jagvetinte10";
+const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 108);
 const MQTT_CLIENT_ID: &str = "esp32s3-sensor";
 const MQTT_TOPIC: &str = "esp32/temperature";
+const DEEP_SLEEP_INTERVAL: SleepDuration = SleepDuration::from_secs(10 * 60);
+const RETRY_DELAY: EmbassyDuration = EmbassyDuration::from_secs(5);
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -78,7 +79,6 @@ async fn main(spawner: Spawner) -> ! {
         .spawn(connection(controller))
         .expect("connection spawn");
     spawner.spawn(net_task(runner)).expect("net task spawn");
-    spawner.spawn(mqtt_task(stack)).expect("mqtt task spawn");
 
     // i2c config
     let i2cconfig =
@@ -91,15 +91,35 @@ async fn main(spawner: Spawner) -> ! {
 
     let addr = SlaveAddr::default();
     let mut sensor = Tmp1x2::new(i2c, addr);
+    let mut rtc = Rtc::new(peripherals.LPWR);
 
     loop {
-        if let Ok(temperature) = sensor.read_temperature() {
-            info!("Temperature: {:?}ºC", temperature);
-            // Send to MQTT task
-            let _ = TEMP_CHANNEL.try_send(temperature);
+        let temperature = loop {
+            match sensor.read_temperature() {
+                Ok(temperature) => break temperature,
+                Err(err) => {
+                    println!("Temperature read failed: {:?}", err);
+                    Timer::after(RETRY_DELAY).await;
+                }
+            }
+        };
+
+        info!("Temperature: {:?}ºC", temperature);
+
+        loop {
+            match publish_temperature_once(stack, temperature).await {
+                Ok(()) => break,
+                Err(err) => {
+                    println!("Publish failed: {err}");
+                    Timer::after(RETRY_DELAY).await;
+                }
+            }
         }
 
-        Timer::after(Duration::from_secs(5)).await;
+        println!("Entering deep sleep for 10 minutes...");
+        Timer::after(EmbassyDuration::from_millis(100)).await;
+        let timer = TimerWakeupSource::new(DEEP_SLEEP_INTERVAL);
+        rtc.sleep_deep(&[&timer]);
     }
 }
 
@@ -114,13 +134,13 @@ async fn connection(mut controller: WifiController<'static>) {
             );
             if let Err(e) = controller.set_config(&client_config) {
                 println!("Failed to apply WiFi config: {e:?}");
-                Timer::after(Duration::from_secs(5)).await;
+                Timer::after(RETRY_DELAY).await;
                 continue;
             }
 
             if let Err(e) = controller.start() {
                 println!("Failed to start WiFi: {e:?}");
-                Timer::after(Duration::from_secs(5)).await;
+                Timer::after(RETRY_DELAY).await;
                 continue;
             }
         }
@@ -130,7 +150,7 @@ async fn connection(mut controller: WifiController<'static>) {
                 println!("Wifi connected!");
                 // Wait for disconnect
                 loop {
-                    Timer::after(Duration::from_secs(1)).await;
+                    Timer::after(EmbassyDuration::from_secs(1)).await;
                     match controller.is_connected() {
                         Ok(true) => {}
                         Ok(false) | Err(WifiError::Disconnected) => break,
@@ -146,7 +166,7 @@ async fn connection(mut controller: WifiController<'static>) {
                 println!("Failed to connect to wifi: {e:?}");
             }
         }
-        Timer::after(Duration::from_millis(5000)).await
+        Timer::after(EmbassyDuration::from_millis(5000)).await
     }
 }
 
@@ -155,96 +175,62 @@ async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>)
     runner.run().await
 }
 
-#[embassy_executor::task]
-async fn mqtt_task(stack: &'static Stack<'static>) {
+async fn publish_temperature_once(stack: &'static Stack<'static>, temp: f32) -> Result<(), &'static str> {
     let mut rx_buffer = [0; 1024];
     let mut tx_buffer = [0; 1024];
     let mut mqtt_rx_buf = [0; 256];
     let mut mqtt_tx_buf = [0; 256];
 
+    println!("Waiting for network to be up...");
     loop {
-        println!("Waiting for network to be up...");
-        loop {
-            if stack.is_link_up() && stack.config_v4().is_some() {
-                break;
-            }
-            Timer::after(Duration::from_millis(500)).await;
+        if stack.is_link_up() && stack.config_v4().is_some() {
+            break;
         }
-        println!("Stack is up, connecting to MQTT broker...");
-
-        let mut socket = embassy_net::tcp::TcpSocket::new(*stack, &mut rx_buffer, &mut tx_buffer);
-        let remote_endpoint = (
-            embassy_net::IpAddress::v4(MQTT_BROKER.0, MQTT_BROKER.1, MQTT_BROKER.2, MQTT_BROKER.3),
-            1883,
-        );
-
-        if let Err(e) = socket.connect(remote_endpoint).await {
-            println!("MQTT Connect error: {:?}", e);
-            Timer::after(Duration::from_secs(5)).await;
-            continue;
-        }
-
-        println!("Connected to MQTT broker!");
-
-        let connect_packet = match build_mqtt_connect_packet(MQTT_CLIENT_ID, &mut mqtt_tx_buf) {
-            Some(packet) => packet,
-            None => {
-                println!("MQTT CONNECT packet build failed");
-                Timer::after(Duration::from_secs(5)).await;
-                continue;
-            }
-        };
-
-        if let Err(e) = socket.write_all(connect_packet).await {
-            println!("MQTT CONNECT write failed: {:?}", e);
-            Timer::after(Duration::from_secs(5)).await;
-            continue;
-        }
-
-        let connack_len = match socket.read(&mut mqtt_rx_buf).await {
-            Ok(0) => {
-                println!("MQTT broker closed connection before CONNACK");
-                Timer::after(Duration::from_secs(5)).await;
-                continue;
-            }
-            Ok(len) => len,
-            Err(e) => {
-                println!("MQTT CONNACK read failed: {:?}", e);
-                Timer::after(Duration::from_secs(5)).await;
-                continue;
-            }
-        };
-
-        if let Err(reason) = parse_mqtt_connack(&mqtt_rx_buf[..connack_len]) {
-            println!("MQTT broker did not accept the session: {}", reason);
-            Timer::after(Duration::from_secs(5)).await;
-            continue;
-        }
-
-        loop {
-            let temp = TEMP_CHANNEL.receive().await;
-
-            let mut payload_buf = [0u8; 32];
-            let payload = format_temp(temp, &mut payload_buf);
-            let publish_packet =
-                match build_mqtt_publish_packet(MQTT_TOPIC, payload.as_bytes(), &mut mqtt_tx_buf) {
-                    Some(packet) => packet,
-                    None => {
-                        println!("MQTT publish packet build failed");
-                        continue;
-                    }
-                };
-
-            if let Err(_) = socket.write_all(publish_packet).await {
-                println!("MQTT Publish failed, connection lost");
-                break;
-            }
-
-            println!("Published temperature: {} to {}", payload, MQTT_TOPIC);
-        }
-
-        Timer::after(Duration::from_secs(5)).await;
+        Timer::after(EmbassyDuration::from_millis(500)).await;
     }
+    println!("Stack is up, connecting to MQTT broker...");
+
+    let mut socket = embassy_net::tcp::TcpSocket::new(*stack, &mut rx_buffer, &mut tx_buffer);
+    let remote_endpoint = (
+        embassy_net::IpAddress::v4(MQTT_BROKER.0, MQTT_BROKER.1, MQTT_BROKER.2, MQTT_BROKER.3),
+        1883,
+    );
+
+    socket
+        .connect(remote_endpoint)
+        .await
+        .map_err(|_| "MQTT TCP connect failed")?;
+
+    println!("Connected to MQTT broker!");
+
+    let connect_packet =
+        build_mqtt_connect_packet(MQTT_CLIENT_ID, &mut mqtt_tx_buf).ok_or("MQTT CONNECT packet build failed")?;
+
+    socket
+        .write_all(connect_packet)
+        .await
+        .map_err(|_| "MQTT CONNECT write failed")?;
+
+    let connack_len = match socket.read(&mut mqtt_rx_buf).await {
+        Ok(0) => return Err("MQTT broker closed connection before CONNACK"),
+        Ok(len) => len,
+        Err(_) => return Err("MQTT CONNACK read failed"),
+    };
+
+    parse_mqtt_connack(&mqtt_rx_buf[..connack_len])?;
+
+    let mut payload_buf = [0u8; 32];
+    let payload = format_temp(temp, &mut payload_buf);
+    let publish_packet = build_mqtt_publish_packet(MQTT_TOPIC, payload.as_bytes(), &mut mqtt_tx_buf)
+        .ok_or("MQTT publish packet build failed")?;
+
+    socket
+        .write_all(publish_packet)
+        .await
+        .map_err(|_| "MQTT publish write failed")?;
+
+    println!("Published temperature: {} to {}", payload, MQTT_TOPIC);
+    Ok(())
 }
 
 fn build_mqtt_connect_packet<'a>(client_id: &str, buf: &'a mut [u8]) -> Option<&'a [u8]> {
