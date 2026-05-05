@@ -28,6 +28,7 @@ Network and MQTT settings are constants in `src/bin/main.rs`:
 | `MQTT_CLIENT_ID` | MQTT client identifier |
 | `MQTT_TOPIC` | Topic to publish to |
 | `DEEP_SLEEP_INTERVAL` | Duration between readings |
+| `RETRY_DELAY` | Back-off applied when a sensor read or MQTT publish fails |
 
 ## Building
 
