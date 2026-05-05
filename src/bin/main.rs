@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 
-use core::time::Duration as SleepDuration;
-
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -11,7 +9,6 @@ use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock, interrupt::software::SoftwareInterruptControl, ram, rng::Rng,
-    rtc_cntl::{sleep::TimerWakeupSource, Rtc},
     timer::timg::TimerGroup,
 };
 use esp_println::println;
@@ -35,7 +32,7 @@ const PASSWORD: &str = "Jagvetinte10";
 const MQTT_BROKER: (u8, u8, u8, u8) = (192, 168, 0, 108);
 const MQTT_CLIENT_ID: &str = "esp32s3-sensor";
 const MQTT_TOPIC: &str = "esp32/temperature";
-const DEEP_SLEEP_INTERVAL: SleepDuration = SleepDuration::from_secs(10 * 60);
+const SAMPLE_INTERVAL: EmbassyDuration = EmbassyDuration::from_secs(10);
 const RETRY_DELAY: EmbassyDuration = EmbassyDuration::from_secs(5);
 
 #[esp_rtos::main]
@@ -91,7 +88,6 @@ async fn main(spawner: Spawner) -> ! {
 
     let addr = SlaveAddr::default();
     let mut sensor = Tmp1x2::new(i2c, addr);
-    let mut rtc = Rtc::new(peripherals.LPWR);
 
     loop {
         let temperature = loop {
@@ -116,10 +112,8 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
-        println!("Entering deep sleep for 10 minutes...");
-        Timer::after(EmbassyDuration::from_millis(100)).await;
-        let timer = TimerWakeupSource::new(DEEP_SLEEP_INTERVAL);
-        rtc.sleep_deep(&[&timer]);
+        println!("Sleeping for 10 seconds before next sample...");
+        Timer::after(SAMPLE_INTERVAL).await;
     }
 }
 
@@ -228,6 +222,15 @@ async fn publish_temperature_once(stack: &'static Stack<'static>, temp: f32) -> 
         .write_all(publish_packet)
         .await
         .map_err(|_| "MQTT publish write failed")?;
+
+    // MQTT DISCONNECT: header 0xE0, remaining length 0x00.
+    socket
+        .write_all(&[0xE0, 0x00])
+        .await
+        .map_err(|_| "MQTT DISCONNECT write failed")?;
+
+    socket.flush().await.map_err(|_| "MQTT flush failed")?;
+    socket.close();
 
     println!("Published temperature: {} to {}", payload, MQTT_TOPIC);
     Ok(())
