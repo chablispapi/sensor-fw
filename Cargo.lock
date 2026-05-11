@@ -1564,7 +1564,6 @@ dependencies = [
  "smoltcp 0.12.0",
  "smoltcp 0.13.0",
  "static_cell",
- "tinymqtt",
  "tmp1x2",
 ]
 
@@ -1764,16 +1763,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "tinymqtt"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc847a228e685a70486e7fc2892bb425c0b5421723d37058c2dccde564f7194e"
-dependencies = [
- "num-derive",
- "num-traits",
 ]
 
 [[package]]
